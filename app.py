@@ -1,8 +1,12 @@
+import os
 import sqlite3
 from flask import Flask, render_template, request, redirect, url_for
 
-DB_PATH = "todos.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "todos.db")
 app = Flask(__name__)
+
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev")
 
 
 def get_db():
@@ -21,6 +25,9 @@ def init_db():
     )
     conn.commit()
     conn.close()
+
+
+init_db()
 
 
 @app.route("/")
@@ -63,5 +70,8 @@ def delete(task_id):
 
 
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=True,
+    )
