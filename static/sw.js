@@ -1,4 +1,4 @@
-const CACHE = "todo-app-v1";
+const CACHE = "todo-app-v2";
 const ASSETS = [
   "/",
   "/static/manifest.json",
@@ -23,10 +23,21 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (url.origin === self.location.origin && url.pathname.startsWith("/api/")) {
+    event.respondWith(
+      fetch(event.request).catch(() =>
+        caches.match(event.request).then(
+          (c) => c || new Response("[]", { headers: { "Content-Type": "application/json" } })
+        )
+      )
+    );
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const fetched = fetch(event.request).then((response) => {
-        if (response && response.status === 200 && event.request.url.startsWith(self.location.origin)) {
+        if (response && response.status === 200 && url.origin === self.location.origin) {
           const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(event.request, copy));
         }

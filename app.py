@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, jsonify, render_template, request
 from supabase import create_client, Client
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://fmftgvrdbtpqocmfcqmm.supabase.co")
@@ -9,48 +9,54 @@ SUPABASE_KEY = os.environ.get(
 )
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev")
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 @app.route("/")
 def index():
+    return render_template("index.html")
+
+
+@app.route("/api/todos")
+def api_todos():
     todos = (
         supabase.table("todos")
         .select("*")
         .order("done", desc=False)
-        .order("id", desc=True)
+        .order("created_at", desc=True)
         .execute()
         .data
     )
-    return render_template("index.html", todos=todos)
+    return jsonify(todos)
 
 
-@app.route("/add", methods=["POST"])
-def add():
-    title = request.form.get("title", "").strip()
-    if title:
-        supabase.table("todos").insert({"title": title}).execute()
-    return redirect(url_for("index"))
-
-
-@app.route("/complete/<int:task_id>", methods=["POST"])
-def complete(task_id):
-    rows = (
-        supabase.table("todos").select("done").eq("id", task_id).execute().data
-    )
-    if rows:
-        supabase.table("todos").update(
-            {"done": not rows[0]["done"]}
-        ).eq("id", task_id).execute()
-    return redirect(url_for("index"))
-
-
-@app.route("/delete/<int:task_id>", methods=["POST"])
-def delete(task_id):
-    supabase.table("todos").delete().eq("id", task_id).execute()
-    return redirect(url_for("index"))
+@app.route("/api/sync", methods=["POST"])
+def api_sync():
+    payload = request.get_json(silent=True) or {}
+    table = supabase.table("todos")
+    for op in payload.get("ops") or []:
+        if not isinstance(op, dict) or not op.get("id"):
+            continue
+        op_id = op["id"]
+        kind = op.get("op")
+        if kind == "insert":
+            title = str(op.get("title", "")).strip()
+            if not title:
+                continue
+            table.upsert(
+                {
+                    "id": op_id,
+                    "title": title,
+                    "done": bool(op.get("done", False)),
+                }
+            ).execute()
+        elif kind == "update":
+            fields = {k: op[k] for k in ("title", "done") if k in op}
+            if fields:
+                table.update(fields).eq("id", op_id).execute()
+        elif kind == "delete":
+            table.delete().eq("id", op_id).execute()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

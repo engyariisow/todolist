@@ -3,12 +3,17 @@
 {% block title %}Todo List{% endblock %}
 
 {% block content %}
-<h1 class="text-3xl font-bold text-slate-800 mb-8">My Todos</h1>
+<div class="flex items-center justify-between mb-8">
+    <h1 class="text-3xl font-bold text-slate-800">My Todos</h1>
+    <span id="offline-badge" class="hidden items-center gap-1 text-sm font-medium text-amber-700 bg-amber-100 px-3 py-1 rounded-full">
+        Offline
+    </span>
+</div>
 
-<form action="{{ url_for('add') }}" method="post" class="flex gap-2 mb-8">
+<form id="add-form" class="flex gap-2 mb-8">
     <input
+        id="new-todo"
         type="text"
-        name="title"
         required
         placeholder="What needs to be done?"
         class="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -21,36 +26,172 @@
     </button>
 </form>
 
-{% if todos %}
-<ul class="space-y-2">
-    {% for todo in todos %}
-    <li class="flex items-center gap-3 bg-white rounded-lg px-4 py-3 shadow-sm">
-        <form action="{{ url_for('complete', task_id=todo['id']) }}" method="post">
-            <button
-                type="submit"
-                class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition
-                       {% if todo['done'] %}border-green-500 bg-green-500 text-white{% else %}border-slate-300 hover:border-green-400{% endif %}"
-                title="{% if todo['done'] %}Mark as not done{% else %}Mark as done{% endif %}"
-            >
-                {% if todo['done'] %}&#10003;{% endif %}
-            </button>
-        </form>
-        <span class="flex-1 {% if todo['done'] %}line-through text-slate-400{% else %}text-slate-700{% endif %}">
-            {{ todo['title'] }}
-        </span>
-        <form action="{{ url_for('delete', task_id=todo['id']) }}" method="post" onsubmit="return confirm('Delete this task?')">
-            <button
-                type="submit"
-                class="text-slate-400 hover:text-red-500 transition"
-                title="Delete"
-            >
-                &#10005;
-            </button>
-        </form>
-    </li>
-    {% endfor %}
-</ul>
-{% else %}
-<p class="text-center text-slate-400 py-12">No tasks yet. Add one above!</p>
-{% endif %}
+<ul id="todo-list" class="space-y-2"></ul>
+
+<p id="empty-state" class="hidden text-center text-slate-400 py-12">No tasks yet. Add one above!</p>
+
+<p id="pending-note" class="hidden text-center text-sm text-amber-700 mt-4">Some changes are waiting to sync&hellip;</p>
+
+<script>
+(function () {
+    "use strict";
+
+    var list = document.getElementById("todo-list");
+    var empty = document.getElementById("empty-state");
+    var badge = document.getElementById("offline-badge");
+    var pendingNote = document.getElementById("pending-note");
+    var form = document.getElementById("add-form");
+    var input = document.getElementById("new-todo");
+
+    var todos = load("todo_items", []);
+    var pendingOps = load("todo_pending_ops", []);
+
+    function load(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+        catch (e) { return fallback; }
+    }
+
+    function save(key, value) {
+        localStorage.setItem(key, JSON.stringify(value));
+    }
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+    }
+
+    function setOffline(show) {
+        badge.classList.toggle("hidden", !show);
+    }
+
+    function render() {
+        list.innerHTML = "";
+        empty.classList.toggle("hidden", todos.length > 0);
+        pendingNote.classList.toggle("hidden", pendingOps.length === 0);
+        todos.slice().sort(function (a, b) {
+            return (a.done ? 1 : 0) - (b.done ? 1 : 0);
+        }).forEach(function (t) {
+            var li = document.createElement("li");
+            li.className = "flex items-center gap-3 bg-white rounded-lg px-4 py-3 shadow-sm";
+            li.innerHTML =
+                '<button data-action="toggle" data-id="' + esc(t.id) + '" class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition ' +
+                (t.done ? "border-green-500 bg-green-500 text-white" : "border-slate-300 hover:border-green-400") +
+                '" title="Toggle">' + (t.done ? "&#10003;" : "") + "</button>" +
+                '<span class="flex-1 ' + (t.done ? "line-through text-slate-400" : "text-slate-700") + '">' + esc(t.title) + "</span>" +
+                '<button data-action="delete" data-id="' + esc(t.id) + '" class="text-slate-400 hover:text-red-500 transition" title="Delete">&#10005;</button>';
+            list.appendChild(li);
+        });
+    }
+
+    function queue(op) {
+        pendingOps.push(op);
+        save("todo_pending_ops", pendingOps);
+    }
+
+    function addTodo(title) {
+        var t = { id: crypto.randomUUID(), title: title, done: false };
+        todos.unshift(t);
+        save("todo_items", todos);
+        queue({ op: "insert", id: t.id, title: t.title, done: false });
+        render();
+        flush();
+    }
+
+    function toggleTodo(id) {
+        var t = todos.find(function (x) { return x.id === id; });
+        if (!t) return;
+        t.done = !t.done;
+        save("todo_items", todos);
+        queue({ op: "update", id: id, done: t.done });
+        render();
+        flush();
+    }
+
+    function deleteTodo(id) {
+        todos = todos.filter(function (x) { return x.id !== id; });
+        save("todo_items", todos);
+        queue({ op: "delete", id: id });
+        render();
+        flush();
+    }
+
+    function flush() {
+        if (pendingOps.length === 0) { setOffline(false); return; }
+        setOffline(!navigator.onLine);
+        if (!navigator.onLine) return;
+        return fetch("/api/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ops: pendingOps })
+        }).then(function (res) {
+            if (res.ok) {
+                pendingOps = [];
+                save("todo_pending_ops", pendingOps);
+                render();
+                return refresh();
+            }
+            setOffline(true);
+        }).catch(function () { setOffline(true); });
+    }
+
+    function refresh() {
+        return fetch("/api/todos", { headers: { Accept: "application/json" } })
+            .then(function (res) {
+                if (!res.ok) throw new Error("bad status");
+                return res.json();
+            })
+            .then(function (data) {
+                if (pendingOps.length === 0) {
+                    todos = data;
+                    save("todo_items", todos);
+                    render();
+                }
+            })
+            .catch(function () {});
+    }
+
+    form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var title = input.value.trim();
+        if (!title) return;
+        addTodo(title);
+        input.value = "";
+    });
+
+    list.addEventListener("click", function (e) {
+        var btn = e.target.closest("button[data-action]");
+        if (!btn) return;
+        var id = btn.getAttribute("data-id");
+        if (btn.getAttribute("data-action") === "toggle") {
+            toggleTodo(id);
+        } else if (window.confirm("Delete this task?")) {
+            deleteTodo(id);
+        }
+    });
+
+    window.addEventListener("online", function () {
+        flush().then(refresh);
+    });
+
+    window.addEventListener("offline", function () {
+        setOffline(true);
+    });
+
+    window.addEventListener("beforeunload", function () {
+        if (pendingOps.length > 0 && navigator.sendBeacon) {
+            navigator.sendBeacon(
+                "/api/sync",
+                new Blob([JSON.stringify({ ops: pendingOps })], { type: "application/json" })
+            );
+        }
+    });
+
+    (function init() {
+        if (navigator.onLine && pendingOps.length === 0) refresh();
+        render();
+        setOffline(!navigator.onLine);
+    })();
+})();
+</script>
 {% endblock %}
