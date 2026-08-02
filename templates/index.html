@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Todo List{% endblock %}
+
+{% block content %}
+<h1 class="text-3xl font-bold text-slate-800 mb-8">My Todos</h1>
+
+<form action="{{ url_for('add') }}" method="post" class="flex gap-2 mb-8">
+    <input
+        type="text"
+        name="title"
+        required
+        placeholder="What needs to be done?"
+        class="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+    <button
+        type="submit"
+        class="px-5 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition"
+    >
+        Add
+    </button>
+</form>
+
+{% if todos %}
+<ul class="space-y-2">
+    {% for todo in todos %}
+    <li class="flex items-center gap-3 bg-white rounded-lg px-4 py-3 shadow-sm">
+        <form action="{{ url_for('complete', task_id=todo['id']) }}" method="post">
+            <button
+                type="submit"
+                class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition
+                       {% if todo['done'] %}border-green-500 bg-green-500 text-white{% else %}border-slate-300 hover:border-green-400{% endif %}"
+                title="{% if todo['done'] %}Mark as not done{% else %}Mark as done{% endif %}"
+            >
+                {% if todo['done'] %}&#10003;{% endif %}
+            </button>
+        </form>
+        <span class="flex-1 {% if todo['done'] %}line-through text-slate-400{% else %}text-slate-700{% endif %}">
+            {{ todo['title'] }}
+        </span>
+        <form action="{{ url_for('delete', task_id=todo['id']) }}" method="post" onsubmit="return confirm('Delete this task?')">
+            <button
+                type="submit"
+                class="text-slate-400 hover:text-red-500 transition"
+                title="Delete"
+            >
+                &#10005;
+            </button>
+        </form>
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p class="text-center text-slate-400 py-12">No tasks yet. Add one above!</p>
+{% endif %}
+{% endblock %}
